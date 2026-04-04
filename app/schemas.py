@@ -2,7 +2,7 @@
 Pydantic schemas for request/response validation.
 """
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 
@@ -20,6 +20,9 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     """Schema for creating a new user."""
     password: str = Field(..., min_length=8)
+    phone: Optional[str] = None
+    dob: Optional[date] = None
+    is_student: Optional[bool] = False
 
 
 class UserLogin(BaseModel):
@@ -32,6 +35,13 @@ class UserResponse(UserBase):
     """Schema for user response."""
     id: int
     created_at: datetime
+    monthly_income: Optional[float] = None
+    monthly_savings: Optional[float] = None
+    investable_amount: Optional[float] = None
+    risk_goal: Optional[str] = None
+    phone: Optional[str] = None
+    dob: Optional[date] = None
+    is_student: Optional[bool] = False
 
     class Config:
         from_attributes = True
@@ -96,6 +106,26 @@ class PortfolioSummary(BaseModel):
 
 
 # ========================
+# Risk Calculator Schemas
+# ========================
+
+class RiskCalculatorRequest(BaseModel):
+    """Schema for risk calculator request."""
+    income: float = Field(..., gt=0, description="Monthly income")
+    savings: float = Field(..., ge=0, description="Monthly savings")
+    age: int = Field(..., ge=18, le=100, description="User age")
+    goals: str = Field(default="balanced", description="Investment goal: conservative, balanced, aggressive")
+
+
+class RiskCalculatorResponse(BaseModel):
+    """Schema for risk calculator response."""
+    risk_level: str  # Low, Medium, High
+    savings_rate: float  # Percentage
+    recommendation: str
+    allocation: dict  # { "Stocks": 50, "Bonds": 30, "Cash": 20 }
+
+
+# ========================
 # Investment Guide Schemas
 # ========================
 
@@ -126,3 +156,86 @@ class EducationTopic(BaseModel):
 class EducationResponse(BaseModel):
     """Schema for education topics list."""
     topics: List[dict]
+
+
+# ========================
+# Expense Schemas
+# ========================
+
+class ExpenseBase(BaseModel):
+    """Base expense schema."""
+    category: str = Field(..., min_length=1, max_length=50)  # Food, Transport, Books, Entertainment, Clothing, Other
+    amount: float = Field(..., gt=0)
+    description: Optional[str] = Field(None, max_length=255)
+    date: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ExpenseCreate(ExpenseBase):
+    """Schema for creating a new expense."""
+    pass
+
+
+class ExpenseUpdate(BaseModel):
+    """Schema for updating an expense."""
+    category: Optional[str] = Field(None, min_length=1, max_length=50)
+    amount: Optional[float] = Field(None, gt=0)
+    description: Optional[str] = Field(None, max_length=255)
+    date: Optional[datetime] = None
+
+
+class ExpenseResponse(ExpenseBase):
+    """Schema for expense response."""
+    id: int
+    user_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ExpenseSummary(BaseModel):
+    """Schema for expense summary."""
+    total_expenses: float
+    by_category: dict  # { "Food": 450, "Transport": 250, ... }
+    expenses: List[ExpenseResponse]
+
+
+# ========================
+# Achievement Schemas
+# ========================
+
+class AchievementBase(BaseModel):
+    """Base achievement schema."""
+    title: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(..., min_length=1, max_length=255)
+    icon: str = Field(..., min_length=1)  # Emoji
+
+
+class AchievementCreate(AchievementBase):
+    """Schema for creating a new achievement."""
+    unlocked: bool = False
+
+
+class AchievementUpdate(BaseModel):
+    """Schema for updating an achievement."""
+    unlocked: Optional[bool] = None
+    unlock_date: Optional[datetime] = None
+
+
+class AchievementResponse(AchievementBase):
+    """Schema for achievement response."""
+    id: int
+    user_id: int
+    unlocked: bool
+    unlock_date: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AchievementsList(BaseModel):
+    """Schema for achievements list."""
+    total_achievements: int
+    unlocked_count: int
+    achievements: List[AchievementResponse]
