@@ -1,5 +1,5 @@
 /* Main App Component */
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useContext } from 'react'
 import { Layout } from './layout'
 import { Toast } from './ui-components'
 import {
@@ -8,19 +8,24 @@ import {
   ExpenseTrackerPage,
   PortfolioPage,
   RiskCalculatorPage,
-  InvestmentGuidePage,
+  
+  AccountPage,
   MarketDashboardPage,
   FinanceNewsPage,
   EducationPage,
   AchievementsPage,
 } from './pages'
+import FinancialProvider, { FinancialContext } from './contexts/FinancialContext'
+import { login as apiLogin, register as apiRegister, me as apiMe, getFinancialProfile } from './api'
 
 /* ============================================
    AUTHENTICATION STATE
    ============================================ */
 function useAuth() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [userInfo, setUserInfo] = useState(null)
+  const [userInfo, setUserInfo] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('user')) } catch { return null }
+  })
 
   const formatAPIError = (data) => {
     try {
@@ -47,34 +52,20 @@ function useAuth() {
   }
 
   const login = async (email, password) => {
-    // Real authentication: call backend /auth/login
     try {
-      const res = await fetch('http://127.0.0.1:8000/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      })
-
-      const text = await res.text().catch(() => '')
-      let data = {}
-      try { data = JSON.parse(text) } catch(e) { data = { raw: text } }
-
-      console.log('Login response status:', res.status, 'body:', data)
-
-      if (!res.ok) {
-        const msg = formatAPIError(data)
-        return { ok: false, message: msg }
+      const data = await apiLogin(email, password)
+      console.log('API /auth/login response:', data)
+      if (!data || data.detail) {
+        console.warn('Login failed, backend returned error payload:', data)
+        return { ok: false, message: formatAPIError(data) }
       }
-
-      // store token and user
-      if (data.access_token) {
-        localStorage.setItem('token', data.access_token)
-      }
+      if (data.access_token) localStorage.setItem('token', data.access_token)
       const user = data.user || { email }
-      setUserInfo({ email: user.email, name: user.name || (email.split('@')[0]) })
+      const info = { email: user.email, name: user.name || (email.split('@')[0]) }
+      setUserInfo(info)
+      localStorage.setItem('user', JSON.stringify(info))
       setIsAuthenticated(true)
-      localStorage.setItem('user', JSON.stringify({ email: user.email, name: user.name || (email.split('@')[0]) }))
-
+      console.log('Login succeeded, stored token and user info')
       return { ok: true }
     } catch (err) {
       console.error('Login error', err)
@@ -87,22 +78,22 @@ function useAuth() {
     // register(name, email, password, { phone, dob, isStudent })
     try {
       const extra = (arguments.length >= 4 && arguments[3]) ? arguments[3] : {}
-      const payload = { name, email, password, phone: extra.phone || null, dob: extra.dob || null, is_student: !!extra.isStudent }
-
-      const res = await fetch('http://127.0.0.1:8000/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      const text = await res.text().catch(() => '')
-      let data = {}
-      try { data = JSON.parse(text) } catch (e) { data = { raw: text } }
-
-      if (!res.ok) {
-        return { ok: false, message: formatAPIError(data) }
+      const payload = {
+        name,
+        email,
+        password,
+        phone: extra.phone || null,
+        dob: extra.dob || null,
+        is_student: !!extra.isStudent,
+        age: extra.age ? parseInt(extra.age) : null,
+        monthly_income: extra.monthly_income ? parseFloat(extra.monthly_income) : null,
+        monthly_savings: extra.monthly_savings ? parseFloat(extra.monthly_savings) : null,
+        investable_amount: extra.investable_amount ? parseFloat(extra.investable_amount) : null,
+        risk_goal: extra.risk_goal || null,
       }
 
+      const data = await apiRegister(payload)
+      if (!data || data.detail) return { ok: false, message: formatAPIError(data) }
       return { ok: true, user: data }
     } catch (err) {
       console.error('Register error', err)
@@ -113,23 +104,36 @@ function useAuth() {
   const logout = () => {
     setIsAuthenticated(false)
     setUserInfo(null)
-    localStorage.removeItem('user')
+    try { localStorage.removeItem('user'); localStorage.removeItem('token'); localStorage.removeItem('financial_profile') } catch {}
   }
 
-  const checkAuth = () => {
-    // Disable auto-login from stored token to ensure users always see the login page first.
-    // Clear any existing token/user on app start so login is required.
+  const checkAuth = async () => {
+    // If token exists validate it with /auth/me
     try {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-    } catch (e) {
-      /* ignore */
+      const token = localStorage.getItem('token')
+      if (!token) {
+        setIsAuthenticated(false)
+        setUserInfo(null)
+        return
+      }
+      const data = await apiMe()
+      if (data && !data.detail) {
+        const info = { email: data.email, name: data.name || data.email.split('@')[0] }
+        setUserInfo(info)
+        localStorage.setItem('user', JSON.stringify(info))
+        setIsAuthenticated(true)
+        return
+      }
+    } catch (err) {
+      console.warn('Token validation failed', err)
     }
+    // fallback: clear
+    try { localStorage.removeItem('token'); localStorage.removeItem('user') } catch {}
+    setIsAuthenticated(false)
+    setUserInfo(null)
   }
 
-  useEffect(() => {
-    checkAuth()
-  }, [])
+  useEffect(() => { checkAuth() }, [])
 
   return { isAuthenticated, userInfo, login, logout, register }
 }
@@ -143,7 +147,12 @@ function LoginPage({ onLogin, onRegister }) {
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [dob, setDob] = useState('')
+  const [age, setAge] = useState('')
   const [isStudent, setIsStudent] = useState(false)
+  const [monthlyIncome, setMonthlyIncome] = useState('')
+  const [monthlySavings, setMonthlySavings] = useState('')
+  const [investableAmount, setInvestableAmount] = useState('')
+  const [riskGoal, setRiskGoal] = useState('balanced')
   const [isRegister, setIsRegister] = useState(false)
   const [error, setError] = useState('')
 
@@ -160,7 +169,14 @@ function LoginPage({ onLogin, onRegister }) {
         return
       }
       try {
-        const result = await onRegister(name, email, password, { phone, dob, isStudent })
+        const profileExtras = {
+          phone,
+          dob,
+          age,
+          isStudent,
+        }
+        // If you want profile fields on registration, we can extend the form later.
+        const result = await onRegister(name, email, password, profileExtras)
         if (!result.ok) {
           setError(result.message || 'Registration failed')
           return
@@ -198,19 +214,14 @@ function LoginPage({ onLogin, onRegister }) {
   }
 
   return (
-    <div style={{
-      minHeight: '100vh',
+    <div className='auth-wrapper' style={{
       background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '20px',
     }}>
       <div style={{
         background: 'white',
         borderRadius: '20px',
         padding: '60px',
-        maxWidth: '500px',
+        maxWidth: '600px',
         width: '100%',
         boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
       }}>
@@ -259,6 +270,11 @@ function LoginPage({ onLogin, onRegister }) {
               </div>
 
               <div className='form-group'>
+                <label className='form-label'>Age</label>
+                <input type='number' min='18' max='100' className='form-control' value={age} onChange={(e) => { setAge(e.target.value); setError('') }} />
+              </div>
+
+              <div className='form-group'>
                 <label className='form-label'>Are you a student / intern?</label>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <input id='isStudent' type='checkbox' checked={isStudent} onChange={(e) => setIsStudent(e.target.checked)} />
@@ -267,6 +283,8 @@ function LoginPage({ onLogin, onRegister }) {
               </div>
             </>
           )}
+
+          {/* Financial inputs removed from signup — collect them in Profile Setup after login */}
           <div className='form-group'>
             <label className='form-label'>Email Address</label>
             <input
@@ -347,23 +365,20 @@ function LoginPage({ onLogin, onRegister }) {
 /* ============================================
    MAIN APP COMPONENT
    ============================================ */
-export default function App() {
+function AppContent() {
   const { isAuthenticated, userInfo, login, logout, register } = useAuth()
   const [currentPage, setCurrentPage] = useState('dashboard')
   const [toast, setToast] = useState(null)
-  const [profile, setProfile] = useState(null)
+  const { profile, setProfile, loadProfile } = useContext(FinancialContext)
 
   useEffect(() => {
-    // fetch profile when authenticated
     const fetchProfile = async () => {
       if (!isAuthenticated) return
       try {
-        const { getProfile } = await import('./api')
-        const p = await getProfile()
-        setProfile(p)
-        if (!p || (!p.monthly_income && !p.monthly_savings && !p.investable_amount)) {
-          setCurrentPage('profile-setup')
-        }
+        const p = await getFinancialProfile()
+        if (p) setProfile(p)
+        const hasValues = p && (p.monthly_savings || p.monthly_income || p.investable_amount)
+        if (!hasValues) setCurrentPage('profile-setup')
       } catch (e) {
         console.error('Failed to load profile', e)
       }
@@ -371,27 +386,40 @@ export default function App() {
     fetchProfile()
   }, [isAuthenticated])
 
+  // Dev / quick reset: visiting ?reset=1 clears stored auth and forces login view
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('reset') === '1') {
+        logout()
+        try { localStorage.removeItem('token'); localStorage.removeItem('user'); localStorage.removeItem('financial_profile') } catch {}
+        setCurrentPage('dashboard')
+        // remove reset param from URL without reload
+        const url = new URL(window.location.href)
+        url.searchParams.delete('reset')
+        window.history.replaceState({}, '', url.toString())
+      }
+    } catch {}
+  }, [])
+
   if (!isAuthenticated) {
     return <LoginPage onLogin={login} onRegister={register} />
   }
 
-  // If authenticated but user hasn't completed profile, show ProfileSetup first
-
-  // Page routing
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard':
-        return <DashboardPage profile={profile} />
+        return <DashboardPage />
       case 'profile-setup':
-        return <ProfileSetupPage profile={profile} onSave={(p) => { setProfile(p); setCurrentPage('dashboard'); setToast({ message: 'Profile saved', type: 'success' }); }} />
+        return <ProfileSetupPage />
       case 'expense-tracker':
         return <ExpenseTrackerPage />
       case 'portfolio':
         return <PortfolioPage />
-      case 'risk-calculator':
-        return <RiskCalculatorPage />
       case 'investment-guide':
-        return <InvestmentGuidePage />
+        return <RiskCalculatorPage />
+      case 'account':
+        return <AccountPage />
       case 'market-dashboard':
         return <MarketDashboardPage />
       case 'finance-news':
@@ -401,7 +429,7 @@ export default function App() {
       case 'achievements':
         return <AchievementsPage />
       default:
-        return <DashboardPage profile={profile} />
+        return <DashboardPage />
     }
   }
 
@@ -418,7 +446,15 @@ export default function App() {
         onLogout={handleLogout}
         userInfo={userInfo}
       >
-        {renderPage()}
+        {(() => {
+          const element = renderPage()
+          try {
+            if (React.isValidElement(element)) return React.cloneElement(element, { navigate: setCurrentPage })
+            return element
+          } catch {
+            return element
+          }
+        })()}
       </Layout>
 
       {toast && (
@@ -429,5 +465,13 @@ export default function App() {
         />
       )}
     </>
+  )
+}
+
+export default function App() {
+  return (
+    <FinancialProvider>
+      <AppContent />
+    </FinancialProvider>
   )
 }

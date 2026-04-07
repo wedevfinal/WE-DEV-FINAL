@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models import Portfolio, User
 from app.schemas import PortfolioCreate, PortfolioResponse, PortfolioUpdate, PortfolioSummary
 from app.dependencies import get_current_user
+from app.services.achievements_service import check_achievements
 
 router = APIRouter(
     prefix="/portfolio",
@@ -34,18 +35,32 @@ def create_portfolio(
     Returns:
         Created portfolio entry
     """
+    # Support new incoming shape: symbol, asset_name/name, quantity, price
+    price = portfolio_data.price or portfolio_data.current_price or portfolio_data.buy_price
+    asset_name = portfolio_data.asset_name or getattr(portfolio_data, 'name', None) or 'Unknown Asset'
+
     new_portfolio = Portfolio(
         user_id=current_user.id,
-        asset_name=portfolio_data.asset_name,
-        asset_type=portfolio_data.asset_type,
+        symbol=portfolio_data.symbol,
+        asset_name=asset_name,
+        asset_type=portfolio_data.asset_type or 'stock',
         quantity=portfolio_data.quantity,
-        buy_price=portfolio_data.buy_price,
-        current_price=portfolio_data.current_price
+        buy_price=portfolio_data.buy_price or price,
+        current_price=portfolio_data.current_price or price,
+        value=round((price or 0.0) * (portfolio_data.quantity or 0.0), 2)
     )
     
     db.add(new_portfolio)
     db.commit()
     db.refresh(new_portfolio)
+
+    # Run achievement checks: investment (first investment) and portfolio updates
+    try:
+        check_achievements(db, current_user.id, "investment")
+        check_achievements(db, current_user.id, "portfolio_update")
+    except Exception:
+        # Do not fail portfolio creation if achievement checks error
+        pass
     
     return new_portfolio
 
@@ -66,6 +81,10 @@ def get_portfolio(
         List of user's portfolio entries
     """
     portfolios = db.query(Portfolio).filter(Portfolio.user_id == current_user.id).all()
+    # Ensure value is populated for each item
+    for p in portfolios:
+        if p.value is None:
+            p.value = p.compute_value()
     return portfolios
 
 
@@ -162,9 +181,18 @@ def update_portfolio(
     
     if portfolio_data.quantity is not None:
         portfolio.quantity = portfolio_data.quantity
+
+    # Recompute cached value
+    portfolio.value = portfolio.compute_value()
     
     db.commit()
     db.refresh(portfolio)
+
+    # Re-evaluate portfolio-related achievements
+    try:
+        check_achievements(db, current_user.id, "portfolio_update")
+    except Exception:
+        pass
     
     return portfolio
 

@@ -20,6 +20,7 @@ class ProfileUpdate(BaseModel):
     monthly_savings: float | None = None
     investable_amount: float | None = None
     risk_goal: str | None = None
+    age: int | None = None
 
 
 class ProfileResponse(BaseModel):
@@ -27,6 +28,7 @@ class ProfileResponse(BaseModel):
     monthly_savings: float | None = None
     investable_amount: float | None = None
     risk_goal: str | None = None
+    age: int | None = None
 
 
 router = APIRouter(
@@ -42,6 +44,7 @@ def get_profile(current_user: Annotated[User, Depends(get_current_user)]):
         monthly_savings=current_user.monthly_savings,
         investable_amount=current_user.investable_amount,
         risk_goal=current_user.risk_goal,
+        age=getattr(current_user, 'age', None),
     )
 
 
@@ -71,6 +74,7 @@ def update_profile(
             monthly_savings=user.monthly_savings,
             investable_amount=user.investable_amount,
             risk_goal=user.risk_goal,
+            age=getattr(user, 'age', None),
         )
     except Exception as e:
         db.rollback()

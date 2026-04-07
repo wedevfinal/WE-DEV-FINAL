@@ -8,9 +8,10 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from app.database import get_db
-from app.models import Achievement, User
+from app.models import Achievement, User, AchievementMaster, UserAchievement
 from app.schemas import AchievementCreate, AchievementResponse, AchievementUpdate, AchievementsList
 from app.dependencies import get_current_user
+from app.services.achievements_service import ensure_master_achievements, unlock_user_achievement
 
 router = APIRouter(
     prefix="/achievements",
@@ -62,28 +63,44 @@ def get_achievements(
     Returns:
         List of achievements with summary
     """
-    achievements = db.query(Achievement).filter(Achievement.user_id == current_user.id).all()
-    
-    # Initialize default achievements if none exist
-    if not achievements:
-        for default in DEFAULT_ACHIEVEMENTS:
-            new_achievement = Achievement(
-                user_id=current_user.id,
-                title=default["title"],
-                description=default["description"],
-                icon=default["icon"],
-                unlocked=False
-            )
-            db.add(new_achievement)
-        db.commit()
-        achievements = db.query(Achievement).filter(Achievement.user_id == current_user.id).all()
-    
-    unlocked_count = sum(1 for a in achievements if a.unlocked)
-    
+    # Ensure master list exists
+    ensure_master_achievements(db)
+
+    masters = db.query(AchievementMaster).all()
+
+    # For each master achievement, get or build the user's status
+    result_items = []
+    unlocked_count = 0
+    for m in masters:
+        ua = db.query(UserAchievement).filter(
+            UserAchievement.user_id == current_user.id,
+            UserAchievement.achievement_id == m.id
+        ).first()
+
+        unlocked = False
+        unlock_date = None
+        if ua and not ua.is_locked:
+            unlocked = True
+            unlock_date = ua.date_unlocked
+            unlocked_count += 1
+
+        # Build object compatible with AchievementResponse
+        item = {
+            "id": m.id,
+            "user_id": current_user.id,
+            "title": m.name,
+            "description": m.description,
+            "icon": m.icon_url or "",
+            "unlocked": unlocked,
+            "unlock_date": unlock_date,
+            "created_at": m.created_at,
+        }
+        result_items.append(item)
+
     return AchievementsList(
-        total_achievements=len(achievements),
+        total_achievements=len(result_items),
         unlocked_count=unlocked_count,
-        achievements=achievements
+        achievements=result_items
     )
 
 
@@ -105,19 +122,27 @@ def create_achievement(
         Created achievement object
     """
     try:
-        new_achievement = Achievement(
-            user_id=current_user.id,
-            title=achievement_data.title,
+        # Create a master achievement definition
+        master = AchievementMaster(
+            name=achievement_data.title,
             description=achievement_data.description,
-            icon=achievement_data.icon,
-            unlocked=achievement_data.unlocked
+            icon_url=achievement_data.icon
         )
-        
-        db.add(new_achievement)
+        db.add(master)
         db.commit()
-        db.refresh(new_achievement)
-        
-        return new_achievement
+        db.refresh(master)
+
+        # Return a shape compatible with existing AchievementResponse
+        return {
+            "id": master.id,
+            "user_id": current_user.id,
+            "title": master.name,
+            "description": master.description,
+            "icon": master.icon_url,
+            "unlocked": False,
+            "unlock_date": None,
+            "created_at": master.created_at,
+        }
     except Exception as e:
         db.rollback()
         raise HTTPException(
@@ -143,18 +168,31 @@ def get_achievement(
     Returns:
         Achievement object
     """
-    achievement = db.query(Achievement).filter(
-        Achievement.id == achievement_id,
-        Achievement.user_id == current_user.id
+    master = db.query(AchievementMaster).filter(AchievementMaster.id == achievement_id).first()
+    if not master:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Achievement not found")
+
+    ua = db.query(UserAchievement).filter(
+        UserAchievement.user_id == current_user.id,
+        UserAchievement.achievement_id == master.id
     ).first()
-    
-    if not achievement:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Achievement not found"
-        )
-    
-    return achievement
+
+    unlocked = False
+    unlock_date = None
+    if ua and not ua.is_locked:
+        unlocked = True
+        unlock_date = ua.date_unlocked
+
+    return {
+        "id": master.id,
+        "user_id": current_user.id,
+        "title": master.name,
+        "description": master.description,
+        "icon": master.icon_url or "",
+        "unlocked": unlocked,
+        "unlock_date": unlock_date,
+        "created_at": master.created_at,
+    }
 
 
 @router.put("/{achievement_id}", response_model=AchievementResponse)
@@ -176,30 +214,40 @@ def unlock_achievement(
     Returns:
         Updated achievement object
     """
-    achievement = db.query(Achievement).filter(
-        Achievement.id == achievement_id,
-        Achievement.user_id == current_user.id
+    master = db.query(AchievementMaster).filter(AchievementMaster.id == achievement_id).first()
+    if not master:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Achievement not found")
+
+    # Update the user's achievement record
+    ua = db.query(UserAchievement).filter(
+        UserAchievement.user_id == current_user.id,
+        UserAchievement.achievement_id == master.id
     ).first()
-    
-    if not achievement:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Achievement not found"
-        )
-    
-    # Update unlocked status
-    if achievement_data.unlocked is not None:
-        achievement.unlocked = achievement_data.unlocked
-        if achievement_data.unlocked and not achievement.unlock_date:
-            achievement.unlock_date = datetime.utcnow()
-    
-    if achievement_data.unlock_date is not None:
-        achievement.unlock_date = achievement_data.unlock_date
-    
+
+    if not ua:
+        ua = UserAchievement(user_id=current_user.id, achievement_id=master.id, is_locked=False, date_unlocked=datetime.utcnow())
+        db.add(ua)
+    else:
+        if achievement_data.unlocked is not None:
+            ua.is_locked = not achievement_data.unlocked
+            if achievement_data.unlocked and not ua.date_unlocked:
+                ua.date_unlocked = datetime.utcnow()
+        if achievement_data.unlock_date is not None:
+            ua.date_unlocked = achievement_data.unlock_date
+
     db.commit()
-    db.refresh(achievement)
-    
-    return achievement
+    db.refresh(ua)
+
+    return {
+        "id": master.id,
+        "user_id": current_user.id,
+        "title": master.name,
+        "description": master.description,
+        "icon": master.icon_url or "",
+        "unlocked": not ua.is_locked,
+        "unlock_date": ua.date_unlocked,
+        "created_at": master.created_at,
+    }
 
 
 @router.delete("/{achievement_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -216,18 +264,14 @@ def delete_achievement(
         current_user: Current authenticated user
         db: Database session
     """
-    achievement = db.query(Achievement).filter(
-        Achievement.id == achievement_id,
-        Achievement.user_id == current_user.id
-    ).first()
-    
-    if not achievement:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Achievement not found"
-        )
-    
-    db.delete(achievement)
+    # Delete master achievement and associated user_achievements
+    master = db.query(AchievementMaster).filter(AchievementMaster.id == achievement_id).first()
+    if not master:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Achievement not found")
+
+    # Remove user_achievements for this master
+    db.query(UserAchievement).filter(UserAchievement.achievement_id == master.id).delete()
+    db.delete(master)
     db.commit()
 
 
@@ -248,21 +292,19 @@ def unlock_achievement_by_id(
     Returns:
         Updated achievement object
     """
-    achievement = db.query(Achievement).filter(
-        Achievement.id == achievement_id,
-        Achievement.user_id == current_user.id
-    ).first()
-    
-    if not achievement:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Achievement not found"
-        )
-    
-    achievement.unlocked = True
-    achievement.unlock_date = datetime.utcnow()
-    
-    db.commit()
-    db.refresh(achievement)
-    
-    return achievement
+    master = db.query(AchievementMaster).filter(AchievementMaster.id == achievement_id).first()
+    if not master:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Achievement not found")
+
+    ua = unlock_user_achievement(db, current_user.id, master.id)
+
+    return {
+        "id": master.id,
+        "user_id": current_user.id,
+        "title": master.name,
+        "description": master.description,
+        "icon": master.icon_url or "",
+        "unlocked": not ua.is_locked,
+        "unlock_date": ua.date_unlocked,
+        "created_at": master.created_at,
+    }

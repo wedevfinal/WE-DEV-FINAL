@@ -2,8 +2,13 @@
 AI Routes - API endpoints for investment advice, market data, and financial news
 """
 
-from fastapi import APIRouter, HTTPException, Query
-from typing import Dict, List, Any
+from fastapi import APIRouter, HTTPException, Query, Request, Depends
+from typing import Dict, List, Any, Optional
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.auth import decode_token, JWTError
+from app.models import User
 
 from . import service
 
@@ -81,11 +86,13 @@ async def get_financial_news() -> Dict[str, Any]:
 
 @router.get("/investment-advice", tags=["Investment Advice"])
 async def get_investment_advice(
-    monthly_savings: float = Query(
-        ..., 
-        gt=0, 
-        description="Monthly savings amount (must be greater than 0)"
-    )
+    request: Request,
+    monthly_savings: Optional[float] = Query(
+        None,
+        gt=0,
+        description="Monthly savings amount (optional if user is authenticated)"
+    ),
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """
     Get personalized investment advice based on monthly savings.
@@ -107,11 +114,33 @@ async def get_investment_advice(
         GET /ai/investment-advice?monthly_savings=2500
     """
     try:
+        # If Authorization header present, prefer user's stored profile values
+        auth = request.headers.get('authorization')
+        if auth and auth.lower().startswith('bearer'):
+            token = auth.split(' ', 1)[1]
+            try:
+                email = decode_token(token)
+            except JWTError:
+                email = None
+
+            if email:
+                user = db.query(User).filter(User.email == email).first()
+                if user and user.monthly_savings is not None:
+                    advice = service.get_investment_advice(user.monthly_savings)
+                    # enhance response with stored profile
+                    advice.update({
+                        'monthly_income': user.monthly_income,
+                        'age': getattr(user, 'age', None),
+                        'goals': user.risk_goal,
+                    })
+                    return {"status": "success", "data": advice}
+
+        # fallback to query parameter
+        if monthly_savings is None:
+            raise HTTPException(status_code=400, detail="monthly_savings is required when not authenticated")
+
         advice = service.get_investment_advice(monthly_savings)
-        return {
-            "status": "success",
-            "data": advice
-        }
+        return {"status": "success", "data": advice}
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -125,11 +154,13 @@ async def get_investment_advice(
 
 @router.get("/dashboard", tags=["Dashboard"])
 async def get_ai_dashboard(
-    monthly_savings: float = Query(
-        ...,
+    request: Request,
+    monthly_savings: Optional[float] = Query(
+        None,
         gt=0,
-        description="Monthly savings amount"
-    )
+        description="Monthly savings amount (optional if user is authenticated)"
+    ),
+    db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """
     Get complete AI dashboard with market data, news, and investment advice.
@@ -149,8 +180,37 @@ async def get_ai_dashboard(
     try:
         market_data = service.get_market_data()
         news = service.get_finance_news()
+
+        # If user is authenticated, prefer stored profile values for advice
+        auth = request.headers.get('authorization')
+        if auth and auth.lower().startswith('bearer'):
+            token = auth.split(' ', 1)[1]
+            try:
+                email = decode_token(token)
+            except JWTError:
+                email = None
+
+            if email:
+                user = db.query(User).filter(User.email == email).first()
+                if user and user.monthly_savings is not None:
+                    advice = service.get_investment_advice(user.monthly_savings)
+                    advice.update({
+                        'monthly_income': user.monthly_income,
+                        'age': getattr(user, 'age', None),
+                        'goals': user.risk_goal,
+                    })
+                    return {
+                        "status": "success",
+                        "market_data": market_data,
+                        "news": news,
+                        "investment_advice": advice
+                    }
+
+        if monthly_savings is None:
+            raise HTTPException(status_code=400, detail="monthly_savings is required when not authenticated")
+
         advice = service.get_investment_advice(monthly_savings)
-        
+
         return {
             "status": "success",
             "market_data": market_data,

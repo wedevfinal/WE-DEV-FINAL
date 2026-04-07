@@ -16,6 +16,8 @@ NEWS_API_KEY = "ae0c2d8caa1d4e83818fa4b0291f4115"
 NEWS_API_URL = "https://newsapi.org/v2/top-headlines"
 
 
+
+
 # ========================
 # Market Data Service
 # ========================
@@ -70,26 +72,40 @@ def get_finance_news() -> List[Dict[str, str]]:
 
         response = requests.get(NEWS_API_URL, params=params, timeout=10)
         response.raise_for_status()
-        
-        articles = response.json().get("articles", [])
-        news_list = []
 
+        data = response.json()
+        articles = data.get("articles", [])
+
+        # If top-headlines returned no articles, try a broader 'everything' search
+        if not articles:
+            try:
+                alt_params = {
+                    "q": "india finance OR markets OR economy",
+                    "language": "en",
+                    "sortBy": "publishedAt",
+                    "pageSize": 5,
+                    "apiKey": NEWS_API_KEY,
+                }
+                alt_resp = requests.get("https://newsapi.org/v2/everything", params=alt_params, timeout=10)
+                alt_resp.raise_for_status()
+                articles = alt_resp.json().get("articles", [])
+            except Exception:
+                articles = []
+
+        # If still empty, keep articles as empty list (no mock fallback)
+
+        news_list: List[Dict[str, str]] = []
         for article in articles[:5]:
             news_list.append({
                 "title": article.get("title", "N/A"),
                 "url": article.get("url", "N/A"),
                 "source": article.get("source", {}).get("name", "N/A"),
-                "published_at": article.get("publishedAt", "N/A")
+                "published_at": article.get("publishedAt", "N/A"),
             })
 
         return news_list
     except Exception as e:
         raise Exception(f"Failed to fetch news: {str(e)}")
-
-
-# ========================
-# Investment Advice Service
-# ========================
 
 def calculate_risk_level(monthly_savings: float) -> str:
     """

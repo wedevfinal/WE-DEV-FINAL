@@ -5,11 +5,10 @@ import React from 'react'
    SIDEBAR COMPONENT
    ============================================ */
 export function Sidebar({ currentPage, onPageChange, userInfo }) {
-  const pages = [
+    const pages = [
     { id: 'dashboard', label: 'Dashboard', icon: '🏠' },
     { id: 'expense-tracker', label: 'Expense Tracker', icon: '💸' },
     { id: 'portfolio', label: 'Portfolio', icon: '📈' },
-    { id: 'risk-calculator', label: 'Risk Calculator', icon: '⚖️' },
     { id: 'investment-guide', label: 'Investment Guide', icon: '🗺️' },
     { id: 'market-dashboard', label: 'Market Dashboard', icon: '📊' },
     { id: 'finance-news', label: 'Finance News', icon: '📰' },
@@ -37,7 +36,7 @@ export function Sidebar({ currentPage, onPageChange, userInfo }) {
         ))}
       </nav>
 
-      <div className='sidebar-footer'>
+      <div className='sidebar-footer' style={{ cursor: 'pointer' }} onClick={() => onPageChange('account')}>
         <div className='user-profile'>
           <div className='user-avatar'>
             {userInfo?.name?.charAt(0) || 'U'}
@@ -82,8 +81,8 @@ export function Layout({ currentPage, onPageChange, onLogout, userInfo, children
       'dashboard': 'Dashboard',
       'expense-tracker': 'Expense Tracker',
       'portfolio': 'Portfolio',
-      'risk-calculator': 'Risk Calculator',
-      'investment-guide': 'Investment Guide',
+         'investment-guide': 'Investment Guide',
+      'account': 'Account',
       'market-dashboard': 'Market Dashboard',
       'finance-news': 'Finance News',
       'education': 'Education',

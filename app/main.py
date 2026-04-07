@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import init_db
-from .routers import auth, portfolio, education, investment, expenses, achievements, profile
+from .routers import auth, portfolio, education, investment, expenses, achievements, profile, financial_profile
 from .ai import ai_router
 
 # Initialize database
@@ -68,6 +68,7 @@ app.include_router(investment.router)
 app.include_router(expenses.router)
 app.include_router(achievements.router)
 app.include_router(profile.router)
+app.include_router(financial_profile.router)
 app.include_router(ai_router, prefix="/ai", tags=["AI"])
 
 

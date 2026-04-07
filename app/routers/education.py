@@ -3,6 +3,14 @@ Investment education routes providing learning materials.
 """
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi import Depends
+from typing import Annotated
+from sqlalchemy.orm import Session
+
+from app.dependencies import get_current_user
+from app.database import get_db
+from app.models import User
+from app.services.achievements_service import check_achievements
 
 router = APIRouter(
     prefix="/education",
@@ -182,6 +190,37 @@ EDUCATION_TOPICS = {
         - Sell overweight positions, buy underweight positions
         """
     }
+   ,
+   "mutual_funds": {
+      "title": "Introduction to Mutual Funds",
+      "description": "What mutual funds are and why investors use them",
+      "content": """
+      Mutual funds pool money from multiple investors to invest in a diversified portfolio of securities such as stocks, bonds, or other assets. They are managed by professional fund managers, making them an attractive option for beginners who may lack the time or expertise to manage investments individually.
+
+      Types of mutual funds include equity funds, debt funds, and hybrid funds. Equity funds invest primarily in stocks and offer higher potential returns with higher risk. Debt funds invest in fixed-income securities like bonds and are generally less risky. Hybrid funds combine both equity and debt to balance risk and return.
+
+      Advantages:
+      - Diversification across many securities
+      - Professional management
+      - Liquidity: units can usually be bought or sold easily
+
+      Considerations:
+      - Fees and expense ratios impact returns
+      - Past performance is not a guarantee of future results
+      - Choose funds that match your risk profile and goals
+      """
+   },
+   "stock_market": {
+      "title": "Stock Market Fundamentals",
+      "description": "Core concepts about buying and owning stocks",
+      "content": """
+      The stock market is a platform where shares of publicly listed companies are bought and sold. When you buy a stock, you are purchasing a small ownership stake in a company. Investors can earn returns through capital appreciation, when the stock price increases, and through dividends, periodic payments some companies make to shareholders.
+
+      Stock prices are influenced by company performance, economic conditions, interest rates, and market sentiment. Two common analysis approaches are fundamental analysis (evaluating financial health and earnings) and technical analysis (studying price patterns).
+
+      Beginners are advised to adopt a long-term investment approach, diversify across companies and sectors, and avoid emotional decision-making during market swings.
+      """
+   }
 }
 
 
@@ -235,3 +274,36 @@ def get_topic(topic: str):
         "description": topic_data["description"],
         "content": topic_data["content"]
     }
+
+
+
+@router.post("/{topic}/complete")
+def complete_topic(
+   topic: str,
+   db: Annotated[Session, Depends(get_db)],
+   current_user: Annotated[User, Depends(get_current_user)]
+):
+   """Mark a topic as completed for the current user and run achievement checks.
+
+   This increments the user's `completed_courses` counter and evaluates
+   the `Knowledge Seeker` achievement.
+   """
+   if topic not in EDUCATION_TOPICS:
+      raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Topic '{topic}' not found")
+
+   # Increment user's completed_courses counter
+   user = db.query(User).filter(User.id == current_user.id).first()
+   if not user:
+      raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+   user.completed_courses = (user.completed_courses or 0) + 1
+   db.commit()
+   db.refresh(user)
+
+   # Run achievement check for course completion
+   try:
+      unlocked = check_achievements(db, current_user.id, "course_finish")
+   except Exception:
+      unlocked = []
+
+   return {"completed_courses": user.completed_courses, "unlocked": [u.id for u in unlocked]}

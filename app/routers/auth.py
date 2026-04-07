@@ -52,7 +52,12 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
             hashed_password=hashed_password,
             phone=getattr(user_data, 'phone', None),
             dob=getattr(user_data, 'dob', None),
-            is_student=getattr(user_data, 'is_student', False)
+            age=getattr(user_data, 'age', None),
+            is_student=getattr(user_data, 'is_student', False),
+            monthly_income=getattr(user_data, 'monthly_income', None),
+            monthly_savings=getattr(user_data, 'monthly_savings', None),
+            investable_amount=getattr(user_data, 'investable_amount', None),
+            risk_goal=getattr(user_data, 'risk_goal', None)
         )
         
         db.add(new_user)

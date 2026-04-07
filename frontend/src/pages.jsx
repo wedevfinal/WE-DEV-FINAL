@@ -1,5 +1,5 @@
 /* All Pages for WeDev Application */
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useContext } from 'react'
 import {
   Card,
   StatCard,
@@ -16,13 +16,23 @@ import { formatINR } from './utils'
 import {
   getMarketData,
   getNews,
+  getAchievements,
+  unlockAchievement,
   getInvestmentAdvice,
   getExpenses,
   getPortfolio,
+  createPortfolioItem,
+  deletePortfolioItem,
   calculateRisk,
   updateProfile,
+  getFinancialProfile,
+  createFinancialProfile,
+  updateFinancialProfile,
+  getEducationTopics,
+  getEducationTopic,
 } from './api'
 import { mockNews, mockPortfolio, mockEducation, mockAchievements } from './data'
+import { FinancialContext } from './contexts/FinancialContext'
 
 /* ============================================
    DASHBOARD PAGE
@@ -44,21 +54,23 @@ export function DashboardPage({ profile } = {}) {
   if (loading) return <Loading />
 
   // Use profile values when available, otherwise fallbacks
-  const monthlyIncome = profile?.monthly_income ?? 5000
-  const monthlySavings = profile?.monthly_savings ?? (monthlyIncome ? Math.max(0, monthlyIncome - 2400) : 0)
-  const investedAmount = profile?.investable_amount ?? 15000
+  const { profile: ctxProfile } = useContext(FinancialContext)
+  const profileObj = ctxProfile || profile || {}
+  const monthlyIncome = profileObj?.monthly_income ?? 5000
+  const monthlySavings = profileObj?.monthly_savings ?? (monthlyIncome ? Math.max(0, monthlyIncome - 2400) : 0)
+  const investedAmount = profileObj?.investable_amount ?? 15000
   const savingsRate = monthlyIncome ? Math.round((monthlySavings / monthlyIncome) * 100) : 0
 
   return (
     <div>
       {/* show profile summary if available */}
-      {profile && (
+      {profileObj && (
         <Card title='Profile Summary' style={{ marginBottom: '20px' }}>
           <div style={{ display: 'flex', gap: '20px' }}>
-            <div>Monthly Income: {formatINR(profile.monthly_income || 0)}</div>
-            <div>Monthly Savings: {formatINR(profile.monthly_savings || 0)}</div>
-            <div>Investable: {formatINR(profile.investable_amount || 0)}</div>
-            <div>Goal: {profile.risk_goal || '—'}</div>
+            <div>Monthly Income: {formatINR(profileObj.monthly_income || 0)}</div>
+            <div>Monthly Savings: {formatINR(profileObj.monthly_savings || 0)}</div>
+            <div>Investable: {formatINR(profileObj.investable_amount || 0)}</div>
+            <div>Goal: {profileObj.risk_goal || '—'}</div>
           </div>
         </Card>
       )}
@@ -136,12 +148,15 @@ export function DashboardPage({ profile } = {}) {
 /* ============================================
    PROFILE SETUP PAGE
    ============================================ */
-export function ProfileSetupPage({ profile = {}, onSave }) {
+export function ProfileSetupPage() {
+  const { profile, saveProfile } = useContext(FinancialContext)
+  const existing = profile || {}
   const [form, setForm] = useState({
-    monthly_income: profile?.monthly_income || '',
-    monthly_savings: profile?.monthly_savings || '',
-    investable_amount: profile?.investable_amount || '',
-    risk_goal: profile?.risk_goal || 'balanced',
+    monthly_income: existing.monthly_income || '',
+    monthly_savings: existing.monthly_savings || '',
+    investable_amount: existing.investable_amount || '',
+    risk_goal: existing.risk_goal || 'balanced',
+    age: existing.age || '',
   })
   const [loading, setLoading] = useState(false)
 
@@ -154,14 +169,29 @@ export function ProfileSetupPage({ profile = {}, onSave }) {
         monthly_savings: form.monthly_savings ? parseFloat(form.monthly_savings) : null,
         investable_amount: form.investable_amount ? parseFloat(form.investable_amount) : null,
         risk_goal: form.risk_goal,
+        age: form.age ? parseInt(form.age) : null,
       }
-      const res = await updateProfile(payload)
-      // fallback to payload if API returns null
-      const saved = res || payload
-      if (onSave) onSave(saved)
+
+      // Validation: investable_amount <= monthly_savings
+      if (payload.investable_amount && payload.monthly_savings && payload.investable_amount > payload.monthly_savings) {
+        alert('Investable amount must be less than or equal to monthly savings')
+        setLoading(false)
+        return
+      }
+
+      const saved = await saveProfile(payload)
+      // saved will be persisted in context/localStorage
+      setForm({
+        monthly_income: saved.monthly_income || '',
+        monthly_savings: saved.monthly_savings || '',
+        investable_amount: saved.investable_amount || '',
+        risk_goal: saved.risk_goal || 'balanced',
+        age: saved.age || '',
+      })
+      alert('Profile saved')
     } catch (err) {
       console.error('Failed to save profile', err)
-      if (onSave) onSave(form)
+      alert('Failed to save profile')
     } finally {
       setLoading(false)
     }
@@ -193,6 +223,11 @@ export function ProfileSetupPage({ profile = {}, onSave }) {
               <option value='balanced'>Balanced</option>
               <option value='aggressive'>Aggressive</option>
             </select>
+          </div>
+
+          <div className='form-group'>
+            <label className='form-label'>Age</label>
+            <input type='number' min='18' max='100' className='form-control' value={form.age} onChange={(e) => setForm({ ...form, age: e.target.value })} />
           </div>
 
           <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
@@ -361,18 +396,49 @@ export function ExpenseTrackerPage() {
 export function PortfolioPage() {
   const [portfolio, setPortfolio] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [form, setForm] = useState({ symbol: '', name: '', quantity: '', price: '' })
 
   useEffect(() => {
     const loadPortfolio = async () => {
+      setLoading(true)
+      try {
+        const data = await getPortfolio()
+        setPortfolio(Array.isArray(data) ? data : (data.portfolio_items || []))
+      } catch (e) {
+        setError('Unable to load portfolio')
+        setPortfolio(mockPortfolio)
+      }
       setLoading(false)
-      setPortfolio(mockPortfolio)
     }
     loadPortfolio()
   }, [])
 
-  if (loading) return <Loading />
+  const totalValue = portfolio.reduce((sum, item) => sum + (item.value ?? ((item.current_price || item.price || 0) * (item.quantity || 0))), 0)
 
-  const totalValue = portfolio.reduce((sum, item) => sum + item.value, 0)
+  const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value })
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError(null)
+    try {
+      await createPortfolioItem(form)
+      const data = await getPortfolio()
+      setPortfolio(Array.isArray(data) ? data : (data.portfolio_items || []))
+      setForm({ symbol: '', name: '', quantity: '', price: '' })
+    } catch (err) {
+      setError(err.message || 'Failed to add item')
+    }
+  }
+
+  const handleDelete = async (id) => {
+    try {
+      await deletePortfolioItem(id)
+      setPortfolio((p) => p.filter(x => x.id !== id))
+    } catch (err) {
+      setError('Failed to delete item')
+    }
+  }
 
   return (
     <div>
@@ -383,55 +449,91 @@ export function PortfolioPage() {
         icon='📈'
       />
 
-      <Card title='Holdings' style={{ marginTop: '30px' }}>
-        {portfolio.length === 0 ? (
-          <EmptyState title='No Holdings' message='Start building your portfolio' />
-        ) : (
-          <table className='table' style={{ marginTop: '20px' }}>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Name</th>
-                <th>Quantity</th>
-                <th>Price</th>
-                <th>Value</th>
-              </tr>
-            </thead>
-            <tbody>
-              {portfolio.map((item) => (
-                <tr key={item.id}>
-                  <td><strong>{item.symbol}</strong></td>
-                  <td>{item.name}</td>
-                  <td>{item.quantity}</td>
-                  <td>{formatINR(item.price)}</td>
-                  <td>{formatINR(item.value)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
+      <div style={{ marginTop: '30px', display: 'grid', gridTemplateColumns: '1fr 380px', gap: 20 }}>
+        <div>
+          <Card title='Holdings'>
+            {loading ? (
+              <Loading />
+            ) : portfolio.length === 0 ? (
+              <EmptyState title='No Investments' message='No investments added yet' />
+            ) : (
+              <table className='table' style={{ marginTop: '20px' }}>
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Name</th>
+                    <th>Quantity</th>
+                    <th>Price</th>
+                    <th>Value</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {portfolio.map((item) => (
+                    <tr key={item.id}>
+                      <td><strong>{item.symbol || item.asset_name}</strong></td>
+                      <td>{item.asset_name || item.name}</td>
+                      <td>{item.quantity}</td>
+                      <td>{formatINR(item.current_price || item.price || 0)}</td>
+                      <td>{formatINR(item.value ?? ((item.current_price || item.price || 0) * item.quantity || 0))}</td>
+                      <td><button className='btn btn-sm btn-danger' onClick={() => handleDelete(item.id)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div style={{ marginTop: 12, textAlign: 'right', fontWeight: 700 }}>
+              Total: {formatINR(totalValue)}
+            </div>
+          </Card>
+        </div>
+
+        <div>
+          <Card title='Add Investment'>
+            <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <input name='symbol' placeholder='Symbol (e.g., AAPL)' value={form.symbol} onChange={handleChange} required />
+              <input name='name' placeholder='Name (Company)' value={form.name} onChange={handleChange} required />
+              <input name='quantity' placeholder='Quantity' value={form.quantity} onChange={handleChange} required type='number' step='any' />
+              <input name='price' placeholder='Price per unit' value={form.price} onChange={handleChange} required type='number' step='any' />
+              {error && <div style={{ color: 'red' }}>{error}</div>}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                <button className='btn btn-secondary' type='submit'>Add</button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      </div>
     </div>
   )
 }
 
 /* ============================================
    RISK CALCULATOR PAGE
-   ============================================ */
+   ============================================
+*/
 export function RiskCalculatorPage() {
-  const [formData, setFormData] = useState({ income: '', savings: '', age: '25', goals: 'balanced' })
+  const { profile } = useContext(FinancialContext)
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
 
-  const handleCalculate = async (e) => {
-    e.preventDefault()
+  const handleCalculate = async () => {
+    if (!profile) {
+      alert('Please complete your financial profile first')
+      return
+    }
     setLoading(true)
-    
     try {
-      const response = await calculateRisk(formData)
-      setResult(response)
-    } catch (error) {
-      console.error('Error calculating risk:', error)
+      const payload = {
+        income: parseFloat(profile.monthly_income || 0),
+        savings: parseFloat(profile.monthly_savings || 0),
+        age: profile.age || null,
+        goals: profile.risk_goal || 'balanced',
+      }
+      const resp = await calculateRisk(payload)
+      setResult(resp)
+    } catch (err) {
+      console.error('Error calculating risk:', err)
+      alert('Failed to calculate risk')
     } finally {
       setLoading(false)
     }
@@ -440,54 +542,12 @@ export function RiskCalculatorPage() {
   return (
     <div>
       <Card title='Calculate Your Risk Profile'>
-        <form onSubmit={handleCalculate}>
-          <div className='form-row'>
-            <div className='form-group'>
-              <label className='form-label'>Monthly Income (₹)</label>
-              <input
-                type='number'
-                className='form-control'
-                required
-                value={formData.income}
-                onChange={(e) => setFormData({ ...formData, income: e.target.value })}
-              />
-            </div>
-            <div className='form-group'>
-              <label className='form-label'>Monthly Savings (₹)</label>
-              <input
-                type='number'
-                className='form-control'
-                required
-                value={formData.savings}
-                onChange={(e) => setFormData({ ...formData, savings: e.target.value })}
-              />
-            </div>
-          </div>
-
-          <div className='form-row'>
-            <div className='form-group'>
-              <label className='form-label'>Age</label>
-              <input
-                type='number'
-                className='form-control'
-                value={formData.age}
-                onChange={(e) => setFormData({ ...formData, age: e.target.value })}
-              />
-            </div>
-            <div className='form-group'>
-              <label className='form-label'>Investment Goal</label>
-              <select className='form-control' value={formData.goals} onChange={(e) => setFormData({ ...formData, goals: e.target.value })}>
-                <option value='conservative'>Conservative</option>
-                <option value='balanced'>Balanced</option>
-                <option value='aggressive'>Aggressive</option>
-              </select>
-            </div>
-          </div>
-
-          <button type='submit' className='btn btn-primary' disabled={loading}>
-            {loading ? 'Calculating...' : 'Calculate Risk Profile'}
+        <div style={{ maxWidth: 600 }}>
+          <p style={{ color: '#64748b' }}>This uses your stored financial profile. Click below to calculate your risk profile.</p>
+          <button className='btn btn-primary' onClick={handleCalculate} disabled={loading || !profile}>
+            {loading ? 'Calculating...' : 'Calculate Risk'}
           </button>
-        </form>
+        </div>
       </Card>
 
       {result && (
@@ -526,51 +586,97 @@ export function RiskCalculatorPage() {
 }
 
 /* ============================================
+   ACCOUNT PAGE
+   ============================================
+*/
+export function AccountPage({ navigate }) {
+  const { profile } = useContext(FinancialContext)
+  let user = null
+  try { user = JSON.parse(localStorage.getItem('user')) } catch { user = null }
+
+  return (
+    <div>
+      <Card title='Account'>
+        <div style={{ display: 'grid', gap: 10 }}>
+          <div><strong>Name:</strong> {user?.name || '—'}</div>
+          <div><strong>Email:</strong> {user?.email || '—'}</div>
+          <div style={{ marginTop: 12 }}><strong>Financial Profile</strong></div>
+          {profile ? (
+            <div style={{ display: 'flex', gap: 20, flexDirection: 'column' }}>
+              <div>Monthly Income: {formatINR(profile.monthly_income || 0)}</div>
+              <div>Monthly Savings: {formatINR(profile.monthly_savings || 0)}</div>
+              <div>Investable Amount: {formatINR(profile.investable_amount || 0)}</div>
+              <div>Risk Goal: {profile.risk_goal || '—'}</div>
+              <div>Age: {profile.age || '—'}</div>
+            </div>
+          ) : (
+            <div>No financial profile found.</div>
+          )}
+          <div style={{ marginTop: 12 }}>
+            <button className='btn btn-primary' onClick={() => navigate && navigate('profile-setup')}>Edit Profile</button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
+/* ============================================
    INVESTMENT GUIDE PAGE
    ============================================ */
 export function InvestmentGuidePage() {
-  const [savings, setSavings] = useState('')
+  const { profile } = useContext(FinancialContext)
   const [advice, setAdvice] = useState(null)
+  const [loading, setLoading] = useState(false)
 
-  const handleGetAdvice = async () => {
-    if (savings) {
-      const data = await getInvestmentAdvice(parseFloat(savings))
-      setAdvice(data)
+  const calculateAndAdvise = async () => {
+    if (!profile) {
+      alert('Please complete your financial profile first')
+      return
+    }
+    setLoading(true)
+    try {
+      const payload = {
+        income: parseFloat(profile.monthly_income || 0),
+        savings: parseFloat(profile.monthly_savings || 0),
+        age: profile.age || null,
+        goals: profile.risk_goal || 'balanced',
+      }
+      const resp = await calculateRisk(payload)
+      // Map risk to suggestions
+      const risk = resp?.risk_level || 'Medium'
+      let suggestions = []
+      if (/low/i.test(risk)) suggestions = ['Fixed Deposits', 'Bonds']
+      else if (/medium/i.test(risk)) suggestions = ['Mutual Funds', 'ETFs']
+      else suggestions = ['Stocks', 'Crypto']
+
+      setAdvice({ risk_level: risk, recommendation: resp?.recommendation || '', allocation: resp?.allocation || {}, suggestions })
+    } catch (err) {
+      console.error('Failed to calculate advice', err)
+      alert('Unable to get advice right now')
+    } finally {
+      setLoading(false)
     }
   }
 
   return (
     <div>
-      <Card title='Get Investment Advice'>
-        <div className='form-group' style={{ maxWidth: '400px' }}>
-          <label className='form-label'>Monthly Savings Amount (₹)</label>
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <input
-              type='number'
-              className='form-control'
-              placeholder='Enter amount'
-              value={savings}
-              onChange={(e) => setSavings(e.target.value)}
-            />
-            <button className='btn btn-primary' onClick={handleGetAdvice}>
-              Get Advice
-            </button>
-          </div>
+      <Card title='Investment Advisor (Risk + Guide)'>
+        <p style={{ color: '#64748b' }}>This advisor uses your stored financial profile to compute your risk level and recommended investments.</p>
+        <div style={{ marginTop: 12 }}>
+          <button className='btn btn-primary' onClick={calculateAndAdvise} disabled={loading || !profile}>{loading ? 'Working...' : 'Calculate & Advise'}</button>
         </div>
       </Card>
 
       {advice && (
-        <Card title='Personalized Advice' style={{ marginTop: '30px' }}>
-          <div style={{ padding: '20px' }}>
-            <h3 style={{ marginBottom: '15px' }}>
-              Risk Level: <Badge text={advice.risk_level} type='green' />
-            </h3>
-            <p style={{ color: '#64748b', lineHeight: '1.8', marginBottom: '20px' }}>
-              {advice.recommendation}
-            </p>
-            <p style={{ fontSize: '12px', color: '#f44336', fontStyle: 'italic' }}>
-              {advice.disclaimer}
-            </p>
+        <Card title='Recommendations' style={{ marginTop: '20px' }}>
+          <div style={{ padding: 16 }}>
+            <h3>Risk Level: <Badge text={advice.risk_level} type='green' /></h3>
+            <p style={{ color: '#64748b' }}>{advice.recommendation}</p>
+            <h4>Suggested Instruments</h4>
+            <ul>
+              {advice.suggestions.map((s) => (<li key={s}>{s}</li>))}
+            </ul>
           </div>
         </Card>
       )}
@@ -648,7 +754,8 @@ export function FinanceNewsPage() {
   useEffect(() => {
     const loadNews = async () => {
       const data = await getNews()
-      setNews(data || mockNews)
+      // if backend returned an empty array, fall back to mock data for UX
+      setNews((data && data.length) ? data : mockNews)
       setLoading(false)
     }
     loadNews()
@@ -669,9 +776,14 @@ export function FinanceNewsPage() {
                   {article.source} • {article.published_at?.split('T')[0] || 'Unknown'}
                 </p>
               </div>
-              <button className='btn btn-secondary btn-sm'>
+              <a
+                className='btn btn-secondary btn-sm'
+                href={article.url || '#'}
+                target="_blank"
+                rel="noreferrer"
+              >
                 Read More →
-              </button>
+              </a>
             </div>
           </Card>
         ))}
@@ -684,37 +796,87 @@ export function FinanceNewsPage() {
    EDUCATION PAGE
    ============================================ */
 export function EducationPage() {
-  const [courses, setCourses] = useState(mockEducation)
+  const [topics, setTopics] = useState([])
+  const [selected, setSelected] = useState(null)
+  const [content, setContent] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      try {
+        const res = await getEducationTopics()
+        setTopics(res || mockEducation)
+      } catch (e) {
+        setTopics(mockEducation)
+      }
+      setLoading(false)
+    }
+    load()
+  }, [])
+
+  const openTopic = async (topicId) => {
+    setSelected(topicId)
+    setContent('')
+    try {
+      const res = await getEducationTopic(topicId)
+      // Prefer rich content field if available
+      const body = res?.content || res?.content || res
+      setContent(body)
+    } catch (e) {
+      setContent('Unable to load topic content.')
+    }
+  }
+
+  if (loading) return <Loading />
 
   return (
-    <div>
-      <h2 style={{ marginBottom: '30px' }}>Learn & Grow</h2>
+    <div style={{ display: 'grid', gridTemplateColumns: '360px 1fr', gap: '20px' }}>
+      <div>
+        <h3 style={{ marginBottom: '16px' }}>Education Topics</h3>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {topics.map((t) => (
+            <Card key={t.topic_id || t.id} style={{ cursor: 'pointer', padding: '12px' }} onClick={() => openTopic(t.topic_id || t.id)}>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                <div style={{ width: 50, height: 50, borderRadius: 10, background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
+                  📘
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <strong style={{ fontSize: '15px' }}>{t.title}</strong>
+                    <span style={{ fontSize: '12px', color: '#6b7280' }}>{t.duration || ''}</span>
+                  </div>
+                  <div style={{ color: '#64748b', marginTop: '6px', fontSize: '13px' }}>{t.description}</div>
+                  {t.completed ? (
+                    <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div style={{ fontSize: 12, color: '#10b981' }}>Completed</div>
+                      <div style={{ height: 6, background: '#e6eef6', flex: 1, borderRadius: 6 }}>
+                        <div style={{ width: '100%', height: '100%', background: '#10b981', borderRadius: 6 }} />
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
-        {courses.map((course) => (
-          <Card key={course.id} title={course.title}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ flex: 1 }}>
-                <Badge text={course.category} type='amber' />
-                <p style={{ color: '#64748b', margin: '10px 0', fontSize: '14px' }}>
-                  {course.description}
-                </p>
-                <p style={{ fontSize: '12px', color: '#64748b' }}>
-                  ⏱️ {course.duration}
-                </p>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                {course.completed ? (
-                  <Badge text='Completed' type='green' />
-                ) : (
-                  <button className='btn btn-secondary btn-sm'>
-                    Start Course
-                  </button>
-                )}
-              </div>
+      <div>
+        <h3 style={{ marginBottom: '16px' }}>{selected ? (topics.find(x => (x.topic_id || x.id) === selected)?.title || 'Topic') : 'Select a topic'}</h3>
+        <Card>
+          {content ? (
+            <div style={{ color: '#263238' }}>
+              <ul style={{ paddingLeft: '1.1rem', margin: 0, color: '#263238' }}>
+                {String(content).split('\n\n').map((point, i) => (
+                  <li key={i} style={{ marginBottom: 10, lineHeight: 1.7 }}>{point}</li>
+                ))}
+              </ul>
             </div>
-          </Card>
-        ))}
+          ) : (
+            <div style={{ color: '#64748b' }}>Choose a topic to view detailed notes.</div>
+          )}
+        </Card>
       </div>
     </div>
   )
@@ -724,7 +886,62 @@ export function EducationPage() {
    ACHIEVEMENTS PAGE
    ============================================ */
 export function AchievementsPage() {
-  const [achievements] = useState(mockAchievements)
+  const [achievements, setAchievements] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  const [authRequired, setAuthRequired] = useState(false)
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      try {
+        const res = await getAchievements()
+        // API returns { total_achievements, unlocked_count, achievements }
+        // Do not show developer mock data for real users — use empty list if none.
+        const list = res?.achievements ?? []
+        // In development only, fallback to mockAchievements for faster UI testing
+        if (list.length === 0 && process.env.NODE_ENV === 'development') {
+          setAchievements(mockAchievements)
+        } else {
+          setAchievements(list)
+        }
+      } catch (e) {
+        // If user is not authenticated, prompt to login.
+        if (e?.response?.status === 401) {
+          setAuthRequired(true)
+        } else {
+          // For other errors, avoid showing inbuilt mock achievements to real users.
+          setAchievements([])
+          console.error('Failed to load achievements', e)
+        }
+      }
+      setLoading(false)
+    }
+    load()
+  }, [])
+
+  const handleUnlock = async (id) => {
+    try {
+      await unlockAchievement(id)
+      setAchievements((prev) => prev.map(a => a.id === id ? { ...a, unlocked: true } : a))
+    } catch (e) {
+      console.error('Failed to unlock achievement', e)
+    }
+  }
+
+  if (loading) return <Loading />
+
+  if (authRequired) return (
+    <div>
+      <h2 style={{ marginBottom: '30px' }}>Your Achievements</h2>
+      <div style={{ color: '#64748b' }}>Please log in to view your achievements.</div>
+      <div style={{ marginTop: '20px' }}>
+        <button className='btn btn-primary' onClick={() => (typeof navigate === 'function' ? navigate('account') : window.location.reload())}>
+          Go to Login
+        </button>
+      </div>
+    </div>
+  )
 
   return (
     <div>
@@ -745,7 +962,12 @@ export function AchievementsPage() {
             {achievement.unlocked ? (
               <Badge text='Unlocked' type='green' />
             ) : (
-              <Badge text='Locked' type='red' />
+              <>
+                <Badge text='Locked' type='red' />
+                <div style={{ marginTop: '10px' }}>
+                  <button className='btn btn-primary btn-sm' onClick={() => handleUnlock(achievement.id)}>Unlock</button>
+                </div>
+              </>
             )}
           </Card>
         ))}

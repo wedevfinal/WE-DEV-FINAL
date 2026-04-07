@@ -108,9 +108,11 @@ export function StatCard({ label, value, change, icon, color = 'green' }) {
 /* ============================================
    CARD COMPONENT
    ============================================ */
-export function Card({ title, children, actions = null }) {
+export function Card({ title, children, actions = null, onClick, style = {}, className = '' }) {
+  const clickableStyle = onClick ? { cursor: 'pointer' } : {}
+
   return (
-    <div className='card'>
+    <div className={`card ${className}`} onClick={onClick} style={{ ...style, ...clickableStyle }}>
       {title && (
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <h3 style={{ fontSize: '18px', fontWeight: '600' }}>{title}</h3>

@@ -23,6 +23,12 @@ class UserCreate(UserBase):
     phone: Optional[str] = None
     dob: Optional[date] = None
     is_student: Optional[bool] = False
+    # Profile fields allowed at registration
+    monthly_income: Optional[float] = None
+    monthly_savings: Optional[float] = None
+    investable_amount: Optional[float] = None
+    risk_goal: Optional[str] = None
+    age: Optional[int] = None
 
 
 class UserLogin(BaseModel):
@@ -41,6 +47,7 @@ class UserResponse(UserBase):
     risk_goal: Optional[str] = None
     phone: Optional[str] = None
     dob: Optional[date] = None
+    age: Optional[int] = None
     is_student: Optional[bool] = False
 
     class Config:
@@ -69,16 +76,29 @@ class TokenData(BaseModel):
 
 class PortfolioBase(BaseModel):
     """Base portfolio schema."""
-    asset_name: str = Field(..., min_length=1, max_length=100)
-    asset_type: str = Field(..., min_length=1, max_length=50)
+    # Backwards-compatible fields
+    asset_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    asset_type: Optional[str] = Field('stock', min_length=1, max_length=50)
     quantity: float = Field(..., gt=0)
-    buy_price: float = Field(..., gt=0)
-    current_price: float = Field(..., gt=0)
+    # Accept price as a single field (price per unit). Keep buy/current names for legacy.
+    price: Optional[float] = Field(None, gt=0)
+    buy_price: Optional[float] = Field(None, gt=0)
+    current_price: Optional[float] = Field(None, gt=0)
+    # New fields
+    symbol: Optional[str] = None
+    value: Optional[float] = None
 
 
 class PortfolioCreate(PortfolioBase):
     """Schema for creating a new portfolio entry."""
-    pass
+    # Allow either `price` or `current_price`/`buy_price` to be provided
+    @field_validator('price', mode='before')
+    def fill_price(cls, v, info):
+        # If price is provided use it; otherwise try current_price or buy_price
+        if v is not None:
+            return v
+        data = info.data or {}
+        return data.get('current_price') or data.get('buy_price')
 
 
 class PortfolioUpdate(BaseModel):
@@ -239,3 +259,36 @@ class AchievementsList(BaseModel):
     total_achievements: int
     unlocked_count: int
     achievements: List[AchievementResponse]
+
+
+# ========================
+# Financial Profile Schemas
+# ========================
+
+class FinancialProfileBase(BaseModel):
+    monthly_income: Optional[float] = None
+    monthly_savings: Optional[float] = None
+    investable_amount: Optional[float] = None
+    risk_goal: Optional[str] = None
+    age: Optional[int] = None
+
+
+class FinancialProfileCreate(FinancialProfileBase):
+    monthly_income: float
+    monthly_savings: float
+    investable_amount: float
+    risk_goal: str
+    age: int
+
+
+class FinancialProfileUpdate(FinancialProfileBase):
+    pass
+
+
+class FinancialProfileResponse(FinancialProfileBase):
+    id: int
+    user_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
