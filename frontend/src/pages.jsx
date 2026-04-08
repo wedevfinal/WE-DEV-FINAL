@@ -119,7 +119,7 @@ export function DashboardPage({ profile } = {}) {
               <strong>{marketData?.sensex || 0}</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Gold (per oz)</span>
+              <span>Gold (₹/g)</span>
               <strong>{formatINR(marketData?.gold || 0)}</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>

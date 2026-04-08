@@ -35,13 +35,27 @@ def get_market_data() -> Dict[str, float]:
     try:
         nifty = yf.Ticker("^NSEI").history(period="1d")["Close"].iloc[-1]
         sensex = yf.Ticker("^BSESN").history(period="1d")["Close"].iloc[-1]
-        gold = yf.Ticker("GC=F").history(period="1d")["Close"].iloc[-1]
+        # Gold from Yahoo (GC=F) is quoted in USD per troy ounce.
+        # Convert to INR per gram:
+        # 1 troy ounce = 31.1034768 grams
+        gold_usd_per_oz = yf.Ticker("GC=F").history(period="1d")["Close"].iloc[-1]
+        # Fetch USD -> INR exchange rate (INR per 1 USD)
+        try:
+            usd_to_inr = yf.Ticker("INR=X").history(period="1d")["Close"].iloc[-1]
+        except Exception:
+            # Fallback: if ticker fails, attempt alternative symbol
+            usd_to_inr = yf.Ticker("USDINR=X").history(period="1d")["Close"].iloc[-1]
+
+        grams_per_ounce = 31.1034768
+        gold_inr_per_gram = (gold_usd_per_oz * usd_to_inr) / grams_per_ounce
+
         bitcoin = yf.Ticker("BTC-USD").history(period="1d")["Close"].iloc[-1]
 
         return {
             "nifty": round(nifty, 2),
             "sensex": round(sensex, 2),
-            "gold": round(gold, 2),
+            # gold now returned as INR per gram
+            "gold": round(gold_inr_per_gram, 2),
             "bitcoin": round(bitcoin, 2),
             "timestamp": "current"
         }

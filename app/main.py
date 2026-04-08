@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import base64
 
-from .database import init_db
+from app.database import init_db
 from .routers import auth, portfolio, education, investment, expenses, achievements, profile, financial_profile
 from .ai import ai_router
 

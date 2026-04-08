@@ -1,0 +1,18 @@
+﻿__pycache__/
+*.pyc
+.venv/
+.env
+# Byte-compiled / optimized / DLL files
+*.py[cod]
+
+# VSCode
+.vscode/
+
+# macOS
+.DS_Store
+
+# Environment
+env/
+venv/
+pip-log.txt
+project AI WEDEV/.venv/
