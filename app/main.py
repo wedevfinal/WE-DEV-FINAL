@@ -5,6 +5,8 @@ Main application entry point
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+import base64
 
 from .database import init_db
 from .routers import auth, portfolio, education, investment, expenses, achievements, profile, financial_profile
@@ -55,6 +57,19 @@ async def health_check():
         "status": "healthy",
         "service": "Personal Investment Management System"
     }
+
+
+# Serve a tiny 1x1 PNG as the favicon to avoid 404s from browsers
+_FAVICON_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+)
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Return a tiny transparent PNG as favicon to prevent 404 errors."""
+    content = base64.b64decode(_FAVICON_PNG_B64)
+    return Response(content=content, media_type="image/png")
 
 
 # ========================
